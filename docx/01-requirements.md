@@ -73,6 +73,11 @@ constraints behind each row are itemised in `03-design-decisions.md` §6 and §8
 The rubric asked for a checked list. The PRD defines **51 requirement IDs across 9 families**, not 7,
 so the families below are the unit of checking (2026-09-28).
 
+The rubric also asked for "all seven hard questions answered in writing." The brief's original list
+of seven is not in the repo; `06-seven-hard-questions.md` reconstructs it from the structure of
+`03-design-decisions.md` and answers each in writing, explicitly flagged as a best-fit assumption
+(AGENTS Q7) pending the owner's original wording.
+
 Status is not "done / not done" — this task delivered the **schema and its design documents**, not an
 application. Most requirements are behavioural and are enforced by code that does not exist yet. Each
 family is therefore graded on what the database actually guarantees:
