@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Secrets — never commit a real environment file (GIT-1, GIT-2).
+# .env.example IS committed, so the variable NAMES are version-controlled and the values are not.
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+# Disposable schema-proof cluster credentials (plaintext password, port 5433).
+.env.proof
+*.pem
+*.key
+
+# Next.js build output. Task 3 has no /app, but the rules are set now so the first app commit
+# does not introduce a leak.
+.next/
+out/
+build/
+dist/
+
+# TypeScript
+*.tsbuildinfo
+
+# Test and coverage output
+coverage/
+.nyc_output/
+
+# Prisma local artefacts. PostgreSQL needs none of these, but a future SQLite datasource would.
+prisma/*.db
+prisma/*.db-journal
+prisma/dev.db
+
+# Logs — a stack trace or a Prisma error can carry a connection string with a password.
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+
+# OS
+.DS_Store

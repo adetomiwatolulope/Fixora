@@ -1,0 +1,33 @@
+{
+  "name": "fixora",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "prisma:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:reset:disposable": "prisma migrate reset",
+    "db:seed": "prisma db seed",
+    "typecheck": "tsc --noEmit",
+    "proof:fixtures": "node --env-file=.env tests/schema-proof/fixtures.ts",
+    "proof:queries": "node --env-file=.env tests/schema-proof/five-queries.ts",
+    "proof:plans": "node --env-file=.env tests/schema-proof/query-plans.ts",
+    "proof:constraints": "node --env-file=.env tests/schema-proof/invalid-states.ts",
+    "proof": "npm run db:seed && npm run proof:fixtures && npm run proof:queries && npm run proof:plans && npm run proof:constraints"
+  },
+  "prisma": {
+    "seed": "node --env-file=.env prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.16.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.2",
+    "prisma": "^6.16.2",
+    "typescript": "^5.9.3"
+  }
+}

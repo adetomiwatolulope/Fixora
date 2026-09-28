@@ -1,0 +1,281 @@
+// Fixora — Prisma schema
+//
+// Reproduced from docx/Fixora_PRD_v2.md §10. §10 is the locked base: no existing model, enum, field
+// or relation is renamed, removed, or retyped (DB-1). Deviations are ADDITIVE only, and each one
+// carries the explicit owner instruction that authorised it:
+//
+//   1. provider_profiles_categories_gin_idx — DB-4 requires this index to ship with the
+//      category-filtered search query that depends on it.
+//   2. ModerationPattern + ModerationPatternKind — the owner instructed that PR-AI-002's
+//      Admin-maintained add/remove list have schema support. §10 lists no table for it.
+//   3. OtpSendAttempt — the owner selected a separate short-lived IP-attempt table for the
+//      PR-TECH-002a per-originating-IP rate limit, over an OtpCode column or external storage.
+//   4. provider_profiles_bio_max_500_chars CHECK — the owner instructed that PR-PROVIDER-001's
+//      500-character bio cap be enforced by the database.
+//
+// See docx/03-design-decisions.md §6 (GIN + CHECK constraints) and §12 (the two added tables).
+//
+// Constraints Prisma's DSL cannot express — the GIN index and all five CHECK constraints — are
+// hand-written in the migrations. Nothing in the DSL below is trusted to enforce them.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  CUSTOMER
+  PROVIDER
+  ADMIN
+}
+
+enum ServiceCategory {
+  PLUMBING
+  ELECTRICAL
+  CLEANING
+  REPAIRS
+  PAINTING
+  PHOTOGRAPHY
+  OTHER
+}
+
+enum OrderStatus {
+  REQUESTED
+  ACCEPTED
+  DECLINED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  DISPUTED
+}
+
+enum CancelReasonCode {
+  CUSTOMER_CHANGED_MIND
+  PROVIDER_UNAVAILABLE
+  PROVIDER_NO_SHOW
+  SCHEDULING_CONFLICT
+  OTHER
+}
+
+enum ReviewModerationStatus {
+  PENDING
+  APPROVED
+  FLAGGED
+  REJECTED
+}
+
+enum SubscriptionTier {
+  FREE
+  FEATURED
+}
+
+enum AdminActionType {
+  REVIEW_MODERATION
+  DISPUTE_RESOLUTION
+  SUBSCRIPTION_CHANGE
+}
+
+// PR-AI-002 / AGENTS rule 19: the moderation keyword/pattern list is maintained by an Admin through
+// an add/remove list, never hardcoded in application code, so it can change without a deployment.
+// That requirement is unimplementable without somewhere to put the entries, and the six models of
+// PRD section 10 have nowhere - Review.aiFlagReason records WHY a review was flagged, not WHAT
+// patterns flag it. This is the seventh of the two owner-authorised models added on top of the
+// locked section 10 base. See docx/03-design-decisions.md section 12.
+enum ModerationPatternKind {
+  SPAM
+  ABUSE
+}
+
+model ModerationPattern {
+  id        String                  @id @default(cuid())
+  kind      ModerationPatternKind
+  // Stored as written. Matching (contains / regex) is decided in the moderation step, and a
+  // pattern is data here, not behaviour - which is what makes it admin-editable.
+  pattern   String
+  enabled   Boolean                 @default(true)
+  note      String?
+  createdAt DateTime                @default(now())
+  updatedAt DateTime                @updatedAt
+
+  // An Admin adding the same pattern twice is a no-op conflict rather than a silent duplicate that
+  // matches twice and skews any count of how many rules fired.
+  @@unique([kind, pattern])
+  @@index([enabled, kind])
+  @@map("moderation_patterns")
+}
+
+model User {
+  id          String    @id @default(cuid())
+  phone       String    @unique
+  role        UserRole
+  name        String
+  city        String
+  state       String
+  latitude    Float
+  longitude   Float
+  createdAt   DateTime  @default(now())
+
+  providerProfile ProviderProfile?
+
+  ordersAsCustomer Order[] @relation("CustomerOrders")
+  ordersAsProvider Order[] @relation("ProviderOrders")
+  reviewsWritten   Review[] @relation("CustomerReviews")
+  adminActions     AdminAction[] @relation("AdminActor")
+
+  @@index([role, city])
+  // ADDITIVE (DB-4): PR-TECH-001 requires "indexed latitude/longitude columns" for the
+  // bounding-box prefilter and §10 defines none. Leading with city serves the single-city
+  // scope (PR-SEARCH-003) as an equality predicate before the latitude range. The columns
+  // live on User, not ProviderProfile — see docx/02-data-model.md §4.3.
+  @@index([city, latitude, longitude])
+  @@map("users")
+}
+
+model ProviderProfile {
+  id                String            @id @default(cuid())
+  user              User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  userId            String            @unique
+  categories        ServiceCategory[]
+  bio               String?
+  startingPriceKobo Int
+  ratingAverage     Float             @default(0)
+  ratingCount       Int               @default(0)
+  subscriptionTier  SubscriptionTier  @default(FREE)
+  featuredStartedAt DateTime?
+  featuredEndsAt    DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  reviewsReceived Review[] @relation("ProviderReviews")
+
+  @@index([subscriptionTier])
+  @@map("provider_profiles")
+}
+
+// NOTE: categories requires a GIN index, added via raw SQL in the migration
+// (Prisma's schema DSL does not generate this index type directly):
+//   CREATE INDEX provider_profiles_categories_gin_idx
+//     ON provider_profiles USING GIN (categories);
+// This is a build prerequisite for PR-SEARCH-001, not an optional optimization.
+// docx/03-design-decisions.md §6 also adds four CHECK constraints here by raw SQL:
+//   reviews_rating_between_1_and_5              (PR-REVIEW-002)
+//   provider_profiles_categories_at_least_one  (PR-PROVIDER-001, PR-AUTH-004, PR-PROVIDER-002)
+//   provider_profiles_featured_window_valid    (PR-SUB-004, MB-6, MB-7)
+//   provider_profiles_rating_bounds            (PR-TECH-006, DB-8)
+//   provider_profiles_bio_max_500_chars        (PR-PROVIDER-001)
+
+model OtpCode {
+  id          String    @id @default(cuid())
+  phone       String
+  codeHash    String
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  attempts    Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  @@index([phone, consumedAt])
+  @@map("otp_codes")
+}
+
+// PR-TECH-002a: OTP sends are rate-limited per originating IP as well as per phone number
+// (PR-AUTH-003), to stop bulk enumeration and harassment of numbers that are not Fixora users.
+//
+// Deliberately NOT a column on OtpCode. The two have different lifetimes - the counter is only
+// meaningful for the rate-limit window, while OTP rows persist as an audit trail - and mixing them
+// would store a caller IP address against a phone number for far longer than the limit needs,
+// which is an NDPR liability for no benefit. A caller is also not necessarily a User, so there is
+// no foreign key to hang this off. Entries are deleted as the window rolls forward.
+model OtpSendAttempt {
+  id           String   @id @default(cuid())
+  requestingIp String
+  createdAt    DateTime @default(now())
+
+  // The rate-limit query counts this IP inside the window; the same leading column lets the
+  // sweeper delete expired rows by age without a full scan.
+  @@index([requestingIp, createdAt])
+  @@map("otp_send_attempts")
+}
+
+model Order {
+  id                     String            @id @default(cuid())
+  customer               User              @relation("CustomerOrders", fields: [customerId], references: [id], onDelete: Restrict)
+  customerId             String
+  // Order.providerId -> User.id. See the hazard note on Review.providerId below (DB-9).
+  provider               User              @relation("ProviderOrders", fields: [providerId], references: [id], onDelete: Restrict)
+  providerId             String
+  category               ServiceCategory
+  description            String
+  jobAddress             String
+  jobLatitude            Float?
+  jobLongitude           Float?
+  preferredDate          DateTime
+  proposedDate           DateTime?
+  status                 OrderStatus       @default(REQUESTED)
+  declineReason          String?
+  agreedPriceKobo        Int?              // set at acceptance (PR-ORDER-004a); informational, not billed
+  providerMarkedDone     Boolean           @default(false)
+  providerMarkedDoneAt   DateTime?
+  autoCompleted          Boolean           @default(false) // true if PR-ORDER-007a's 72h sweep completed this order
+  cancelledBy            String?
+  cancelReasonCode       CancelReasonCode?
+  cancelReason           String?
+  disputeRaisedBy        String?
+  disputeReason          String?
+  disputeResolutionNote  String?
+  disputeResolvedAt      DateTime?
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+  completedAt            DateTime?
+
+  review Review?
+
+  @@index([customerId, status])
+  @@index([providerId, status])
+  @@index([status])
+  @@index([status, providerMarkedDone, providerMarkedDoneAt]) // supports the PR-TECH-008 sweep
+  @@map("orders")
+}
+
+model Review {
+  id                String                  @id @default(cuid())
+  order             Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderId           String                  @unique
+  customer          User                    @relation("CustomerReviews", fields: [customerId], references: [id], onDelete: Restrict)
+  customerId        String
+  // HAZARD (DB-9): Review.providerId -> ProviderProfile.id, while Order.providerId -> User.id.
+  // Both are non-null String named providerId and nothing in the type system or a foreign key
+  // catches a mix-up. One conversion function in /modules/providers must map between them.
+  // Highest-risk item in the model — docx/02-data-model.md §4.1, docx/03-design-decisions.md §11.1.
+  provider          ProviderProfile         @relation("ProviderReviews", fields: [providerId], references: [id], onDelete: Restrict)
+  providerId        String
+  rating            Int
+  comment           String?
+  moderationStatus  ReviewModerationStatus  @default(PENDING)
+  aiFlagReason      String?
+  createdAt         DateTime                @default(now())
+
+  @@index([providerId, moderationStatus])
+  @@index([moderationStatus])
+  @@map("reviews")
+}
+
+model AdminAction {
+  id          String           @id @default(cuid())
+  admin       User             @relation("AdminActor", fields: [adminId], references: [id], onDelete: Restrict)
+  adminId     String
+  actionType  AdminActionType
+  targetId    String
+  note        String?
+  createdAt   DateTime         @default(now())
+
+  // Append-only (PR-ADMIN-004, AGENTS rule 21, DB-6). No updatedAt and no deletedAt by design.
+  // A BEFORE UPDATE OR DELETE rule would make this unforgeable-by-accident, but no requirement
+  // names a database object and DB-1 requires an instruction — docx/03-design-decisions.md §6.4.
+  @@index([targetId])
+  @@index([actionType])
+  @@map("admin_actions")
+}
